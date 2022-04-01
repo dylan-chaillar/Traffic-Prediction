@@ -1,0 +1,123 @@
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+#Import models and testing packages from sklearn
+
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.model_selection import cross_val_score
+from sklearn.metrics import r2_score
+from pandas.tseries.holiday import USFederalHolidayCalendar as calendar
+
+
+
+# import training data
+filepath = filepath + 'train.csv'
+df = pd.read_csv(filepath)
+
+#separate datetimes into day of the week and time of day (it should be easier to predict from these)
+
+#make location into a single feature
+df['location'] = ((df['x'])+(df['y']*10))
+
+#convert the time to a datetime format
+df['time'] = pd.to_datetime(df['time'])
+
+#make weekday, hour, and minute features
+df['weekday'] = df['time'].dt.weekday
+df['hour'] = df['time'].dt.hour
+df['minute'] = df['time'].dt.minute
+
+#make direction into a smallint
+df['direction'] = df['direction'].replace(to_replace=['NB','NE','EB','SE','SB','SW','WB','NW'],value=[1,2,3,4,5,6,7,8])
+
+#define holidays
+cal = calendar()
+holidays = cal.holidays(start=df['time'].min(), end=df['time'].max())
+
+#create boolean column for whether the day is a holliday
+df['Holiday'] = df['time'].isin(holidays)
+
+#create features and target
+X = df[['location','direction','weekday', 'hour','minute','Holiday']]
+y = df['congestion']
+
+
+X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=.10,random_state=55)
+
+#initialize models
+models = []
+
+#make a basic linear regression
+models.append(('LR', LinearRegression()))
+
+#make a simple k nearest neighbors regressor with 5 neighbors
+models.append(('KNN5', KNeighborsRegressor(n_neighbors=5)))  
+
+#make a random forest regressor with 10 estimators
+models.append(('RF10', RandomForestRegressor(n_estimators = 10))) # Ensemble method - collection of many decision trees
+
+#use a simpler decision tree regressor
+models.append(('DTR', DecisionTreeRegressor())) # kernel = linear
+
+# initialize results and name (for graphing)
+results = []
+names = []
+
+#iterate over models
+for name, model in models:
+
+    # TimeSeries Cross validation    
+    cv_results = cross_val_score(model, X, y, scoring='r2')
+    results.append(cv_results)
+    names.append(name)
+    print('%s: %f (%f)' % (name, cv_results.mean(), cv_results.std()))
+    
+# Compare Algorithms
+plt.boxplot(results, labels=names)
+plt.title('Algorithm Comparison')
+plt.show()
+
+#split the data into training and testing data
+X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=.10,random_state=55)
+
+#fit to the best model we have
+reg = DecisionTreeRegressor(criterion='friedman_mse')
+reg.fit(X_train,y_train)
+
+#predict on the testing data
+congestion = reg.predict(X_test)
+
+#find all actual values of congestion
+real_congest = np.sort(y.unique())
+
+#iterate over the prediction
+for i in range(0,len(congestion)):
+
+    #find where our prediction would fit next to actual congestion values
+    insert_idx = np.searchsorted(real_congest, congestion[i])
+    
+    #if our prediction is at the very end, set congestion to the highest actual value
+    if insert_idx == len(real_congest):
+        congestion[i] = real_congest[-1]
+        
+    #if our prediction is in the very beginning, set congestion to the lowest actual value
+    elif insert_idx == 0:
+        congestion[i] = real_congest[0]
+        
+    #otherwise figure out if i should round down or round up and do that
+    lower_val = real_congest[insert_idx - 1]
+    upper_val = real_congest[insert_idx]
+    if abs(lower_val - congestion[i]) < abs(upper_val - congestion[i]):
+        congestion[i] = lower_val
+    else:
+        congestion[i] = upper_val
+
+
+print('DT: ',r2_score(y_test,congestion))
